@@ -1,6 +1,6 @@
 # SAM.gov Opportunities Tracker
 
-> Part of the **[DevOps Lab](https://github.com/github-kbaker/devops_openshift-lab/tree/main)** collection —
+> Part of the **[DevOps Lab](https://github.com/github-kbaker/sam_opportunities_trakker-README.MD)** collection —
 > a hands-on DevOps / OpenShift reference project.
 
 A full-stack web app that pulls federal contract opportunities from
@@ -15,13 +15,15 @@ dashboard with persistence, favorites, history, and CSV export.
 
 ## What it does (in one paragraph)
 
-You paste your SAM.gov API key into **Settings**, click **Fetch Now**, and the
-app queries `https://api.sam.gov/opportunities/v2/search` across every NAICS ×
-notice-type combination you configured, paginates through all results, scores
-each opportunity (+1 per keyword match in title/description, +3 if NAICS
-matches, +1 if active, capped at 10), deduplicates by `noticeId`, and saves
-anything at or above your score threshold to MongoDB. The dashboard shows the
-latest run; you can filter, star favorites, browse past runs, and export CSV.
+An admin seeds the app with a SAM.gov API key (one-time, via API or
+MongoDB). After that, anyone using the dashboard just clicks **Fetch Now**
+— the app queries `https://api.sam.gov/opportunities/v2/search` across every
+NAICS × notice-type combination configured in Settings, paginates through
+all results, scores each opportunity (+1 per keyword match in title/
+description, +3 if NAICS matches, +1 if active, capped at 10), deduplicates
+by `noticeId`, and saves anything at or above your score threshold to
+MongoDB. The dashboard shows the latest run; you can filter, star favorites,
+browse past runs, and export CSV.
 
 ---
 
@@ -37,17 +39,93 @@ latest run; you can filter, star favorites, browse past runs, and export CSV.
 
 ---
 
+## Setup options
+
+How you provide the SAM.gov API key depends on who runs the app. The Settings
+UI **does not expose the API key field** — by design, end users never see or
+edit credentials. Pick the seeding flow that fits your environment.
+
+### ✅ Option 1 — Seed the API key into MongoDB *(recommended for shared deployments)*
+
+**What happens**
+
+- An admin runs **one** API call (or one MongoDB update) to set the key in the
+  `settings` collection's singleton document
+- The key is stored in your own MongoDB instance only
+
+👉 **After that:**
+
+- End users never see the key — Settings UI shows only keywords, NAICS,
+  notice types, threshold, and days-back
+- Every **Fetch Now** click runs automatically using the stored key
+- The key persists across browser refreshes, supervisor restarts, and
+  deploys (it lives in MongoDB, not in env files or session state)
+
+**One-time seed (admin)**
+
+```bash
+# Via the live API (replace YOUR_KEY)
+curl -X PUT https://your-app.example.com/api/settings \
+  -H "Content-Type: application/json" \
+  -d '{"api_key":"YOUR_SAM_GOV_API_KEY"}'
+```
+
+```bash
+# Or via MongoDB shell
+mongosh "$MONGO_URL"
+> use sam_tracker
+> db.settings.updateOne(
+    {_id: "singleton"},
+    {$set: {api_key: "YOUR_SAM_GOV_API_KEY"}},
+    {upsert: true}
+  )
+```
+
+**To rotate the key**
+
+Re-run either command above with the new key. The old value is overwritten
+immediately. There is no UI for rotation — this is intentional, since
+credentials should not live behind a public dashboard.
+
+**Why this design**
+
+- ✔️ End users (BD reps) never see, leak, or accidentally change the key
+- ✔️ Single source of truth: the `settings.api_key` field in MongoDB
+- ✔️ No env-var deploys needed when the key rotates
+- ✔️ Zero secrets in source control
+
+**Security notes**
+
+- The key is stored **only** in your MongoDB instance — never sent anywhere
+  except SAM.gov's API
+- The Settings UI does not display the key. The backend `GET /api/settings`
+  endpoint still returns it (so the front-end could detect "configured"
+  state) — if you need to fully mask it from API responses, see Roadmap
+
+### ⏩ Option 2 — Seed via environment variable *(coming soon)*
+
+Future enhancement: read `SAM_API_KEY` from `backend/.env` on startup and
+auto-seed it into MongoDB if the singleton has no key. Not implemented yet —
+use Option 1 today.
+
+---
+
 ## Quick start (live instance)
 
 The app is already running at:
 
 > **https://232a7e6c-d012-4ca7-be76-414da73d2be5.preview.emergentagent.com**
 
+For end users (BD reps):
+
 1. Open the URL above.
-2. Click **Settings** (top-right).
-3. Paste your SAM.gov API key → **Save settings**.
-4. Click **Fetch Now**. Wait 15–30 seconds.
-5. Your top opportunities appear, sorted by score.
+2. Click **Fetch Now** (top-right). Wait 15–30 seconds.
+3. Your top opportunities appear, sorted by score.
+4. Click **Settings** to tune keywords, NAICS codes, notice types, and the
+   score threshold.
+
+For admins (one-time setup): see [Setup options](#setup-options) above to seed
+the SAM.gov API key into MongoDB.
 
 Don't have a SAM.gov key yet? See [Getting an API key](#getting-a-samgov-api-key).
 
@@ -124,7 +202,7 @@ stdout. Here's what changed and why:
 
 | Original script | This build | Why |
 |---|---|---|
-| Key read from `SAM_API_KEY` env var | Stored in MongoDB via Settings UI | Team can update it without redeploys; no secrets in env files |
+| Key read from `SAM_API_KEY` env var | Stored in MongoDB (admin-seeded; never exposed in UI) | Rotate without redeploys; end users never see credentials |
 | Hardcoded `KEYWORDS`, `NAICS_CODES`, `NOTICE_TYPES` | All editable in Settings drawer | Different practices need different filters |
 | Hardcoded threshold (`>= 5`) | User-adjustable slider | Lower when results are sparse; raise when noisy |
 | Fixed 3-day look-back | 1–90 day range | Supports both daily triage and quarterly research |
@@ -149,7 +227,8 @@ default NAICS codes (541511/541512/541513/541519), default notice types
 4. Re-enter your account password when prompted.
 5. Copy the key **immediately** — it's only shown once.
 6. Wait **~15 minutes** for the key to activate in SAM.gov's API gateway.
-7. Paste into **Settings → SAM.gov API Key** in the dashboard and save.
+7. Hand it to your admin to seed into MongoDB
+   ([see Option 1](#-option-1--seed-the-api-key-into-mongodb-recommended-for-shared-deployments)).
 
 Rate limit: ~1,000 requests/day by default (one fetch = ~8 requests minimum,
 more with pagination).
@@ -209,7 +288,7 @@ frontend/src/
     ├── FiltersSidebar.jsx          # Search, score slider, NAICS/type selects, favorites switch
     ├── OpportunityTable.jsx        # Score badges, keyword chips, row hover
     ├── OpportunityDetailSheet.jsx  # Right drawer with full metadata
-    ├── SettingsSheet.jsx           # API key, chip inputs, threshold slider
+    ├── SettingsSheet.jsx           # Keyword/NAICS chips, notice types, threshold, days-back (NO API key field)
     └── HistoryList.jsx             # Past fetch runs with status
 ```
 
@@ -263,11 +342,12 @@ pytest tests/ -v
 
 | Symptom | Fix |
 |---|---|
-| "SAM.gov API key is not configured" | Open Settings → paste key → Save |
+| "SAM.gov API key is not configured" (admin only) | Seed the key into MongoDB — see [Setup options · Option 1](#-option-1--seed-the-api-key-into-mongodb-recommended-for-shared-deployments) |
 | 401/403 from SAM.gov | Key invalid or not yet activated (wait 15 min after regeneration) |
 | Fetched 5,000 · saved 0 | Threshold too high, or keywords don't appear in titles. Lower threshold to 3–4, or add title-friendly keywords |
 | Fetch times out | Broad NAICS × notice-type combos = many paginated calls. Narrow NAICS list or lower `days_back` |
 | Key looks right but still fails | Regenerate at sam.gov → Account Details → API Key → Regenerate. Wait 15 min |
+| Need to rotate the key | Re-run the admin seed command from Setup options · Option 1 (no UI exists for this — by design) |
 | Favorites disappear after re-fetch | They shouldn't — favorites propagate by `noticeId`. If they do, check the opportunity actually has a `noticeId` in the response |
 
 ---
@@ -296,12 +376,13 @@ persistence, UI, and team workflows on top.
 This tracker is part of the **DevOps Lab** portfolio by
 [@github-kbaker](https://github.com/github-kbaker):
 
-> 🔗 **https://github.com/github-kbaker/devops_openshift-lab/tree/main**
+> 🔗 **https://github.com/github-kbaker/sam_opportunities_trakker-README.MD**
 
 A companion hands-on lab covering DevOps tooling, OpenShift, and cloud-native
 deployment patterns.
 
 ---
 
-## License# sam_opportunities_trakker-README.MD
-SAM.GOV Opportunities
+## License
+
+Internal build. Add your own license terms before distributing.
